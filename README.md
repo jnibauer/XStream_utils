@@ -10,8 +10,10 @@ pip install git+https://github.com/jnibauer/XStream_utils.git
 
 ## Contents
 
-- **`plotcontours`** — custom weighted corner plots (no resampling, no `corner` package)
-- **`stats`** — H-mean-based quantiles and statistics, consistent with the corner plot's heatmap
+- **`plotcontours`** : custom weighted corner plots 
+- **`stats`** : H-mean-based quantiles and statistics, consistent with the corner plot's heatmap
+- What is H-mean? Rather than taking a histogram (counts), we take the mean of `values` in bins (set by user). Essentially, `scipy.stats.binned_statistic`.
+- Why do we need this? We sample a tempered likelihood (avg log-likelihood). The density of points $\neq$ density of posterior. By dividing values by the local density ($\propto N$), we build up a more accurate picture of the target distribution. 
 
 ---
 
@@ -159,7 +161,7 @@ fig, axes_dict = plot_corner(
 
 ---
 
-## API reference
+## Main functions
 
 ### `h_mean_quantile(values, weights, quantiles, n_bins=50, log_space=False)`
 Returns quantiles of the H-mean distribution. For 1D input returns an array of shape `(len(quantiles),)`; for 2D input returns `(len(quantiles), n_cols)`.
