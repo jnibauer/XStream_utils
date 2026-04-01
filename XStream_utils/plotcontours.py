@@ -47,9 +47,12 @@ def plot_2d_panel(
     contour_on_mean=True,
     cmap='Purples',
     contour_colors='k',
+    contour_linestyles=('--', '-'),
     true_x=None,
     true_y=None,
     heatmap_on_mean=True,
+    density=True,
+    axis_fraction=1.0,
 ):
     """
     Draw a single weighted 2-D heatmap + contours on an existing axes.
@@ -69,6 +72,16 @@ def plot_2d_panel(
     contour_on_mean : bool
     cmap : str
     contour_colors : str or sequence
+    contour_linestyles : str or sequence of str
+        Linestyle(s) for contour lines, one per level or a single style for
+        all levels. E.g. ``('--', '-')`` or ``'-'``.
+    density : bool
+        If True (default), draw the background heatmap. If False, show only
+        the contour curves with no background density.
+    axis_fraction : float
+        Fraction of the full bin-edge range to display. ``1.0`` (default)
+        shows the full range; smaller values tighten the limits symmetrically
+        around the centre, which avoids contours being clipped at the edges.
     """
     x = np.asarray(x)
     y = np.asarray(y)
@@ -81,10 +94,11 @@ def plot_2d_panel(
         H_mean = np.where(H_count > 0, H_sum / H_count, np.nan)
 
     H_plot = np.where(H_count > 0, H_mean if heatmap_on_mean else H_sum, np.nan)
-    vmin   = np.nanmin(H_plot)
-    vmax   = np.nanmax(H_plot)
 
-    ax.pcolormesh(xedges, yedges, H_plot.T, cmap=cmap, vmin=vmin, vmax=vmax, rasterized=True)
+    if density:
+        vmin = np.nanmin(H_plot)
+        vmax = np.nanmax(H_plot)
+        ax.pcolormesh(xedges, yedges, H_plot.T, cmap=cmap, vmin=vmin, vmax=vmax, rasterized=True)
 
     if show_contours:
         H_base    = np.nan_to_num(H_mean, nan=0.0) if contour_on_mean else H_sum
@@ -98,7 +112,7 @@ def plot_2d_panel(
                 levels=lvls,
                 colors=contour_colors,
                 linewidths=[0.8, 1.2],
-                linestyles=['--', '-'],
+                linestyles=contour_linestyles,
                 rasterized=True,
             )
 
@@ -107,8 +121,13 @@ def plot_2d_panel(
     if true_y is not None:
         ax.axhline(true_y, color='k', lw=1.0, zorder=5)
 
-    ax.set_xlim(xedges[0], xedges[-1])
-    ax.set_ylim(yedges[0], yedges[-1])
+    def _clipped(lo, hi):
+        mid = 0.5 * (lo + hi)
+        half = 0.5 * (hi - lo) * axis_fraction
+        return mid - half, mid + half
+
+    ax.set_xlim(*_clipped(xedges[0], xedges[-1]))
+    ax.set_ylim(*_clipped(yedges[0], yedges[-1]))
 
 
 def plot_corner(
@@ -126,10 +145,17 @@ def plot_corner(
     hist1d_on_mean=True,
     cmap='Purples',
     contour_colors='k',
+    contour_linestyles=('--', '-'),
+    density=True,
+    hist1d_histtype='bar',
+    hist1d_color='mediumpurple',
+    hist1d_density=True,
+    axis_fraction=1.0,
     figsize=(22, 22),
     savefig=None,
     fig=None,
     subplot_spec=None,
+    axes_dict=None,
 ):
     """
     Custom weighted corner plot — no resampling, no `corner` package.
@@ -179,6 +205,25 @@ def plot_corner(
         Matplotlib colormap name for the 2-D heatmap panels.
     contour_colors : str or sequence
         Colour(s) for the contour lines.
+    contour_linestyles : str or sequence of str
+        Linestyle(s) for contour lines, one per level or a single style for
+        all levels. Default ``('--', '-')``.
+    density : bool
+        If True (default), draw the background heatmap in 2-D panels.
+        If False, show only the contour curves with no background density.
+    hist1d_histtype : str
+        Histogram style for diagonal panels. ``'bar'`` (default) draws filled
+        bars; ``'step'`` draws an unfilled step outline.
+    hist1d_color : str
+        Color for the 1-D diagonal histograms. Default ``'mediumpurple'``.
+    hist1d_density : bool
+        If True, normalise each 1-D histogram so its area integrates to 1,
+        making histograms from different datasets directly comparable when
+        overlaid. Default True.
+    axis_fraction : float
+        Fraction of the full bin-edge range to display. ``1.0`` (default)
+        shows the full range; smaller values tighten the limits symmetrically
+        around the centre, which avoids contours being clipped at the edges.
     figsize : tuple
         Figure size passed to plt.figure.
     savefig : str or None
@@ -190,6 +235,12 @@ def plot_corner(
         A GridSpec slot (e.g. ``gs[0, 1]``) to embed the corner plot into.
         When provided, the corner is drawn inside that slot using
         GridSpecFromSubplotSpec; ``fig`` must also be supplied.
+    axes_dict : dict or None
+        Existing ``(row, col) → Axes`` dict returned by a previous
+        ``plot_corner`` call. When provided, all rendering is done onto those
+        axes (no new figure or GridSpec is created), enabling multiple datasets
+        to be overlaid on the same corner plot. ``fig`` is inferred from the
+        axes automatically, so it does not need to be passed separately.
 
     Returns
     -------
@@ -210,6 +261,10 @@ def plot_corner(
             count_n, _ = np.histogram(points_good[:, i], bins=edges)
             with np.errstate(invalid='ignore'):
                 counts = np.where(count_n > 0, counts / count_n, 0.0)
+        if hist1d_density:
+            area = np.sum(counts * np.diff(edges))
+            if area > 0:
+                counts = counts / area
         hist1d_data[i] = (counts, edges)
 
     hist2d_data    = {}
@@ -237,18 +292,27 @@ def plot_corner(
 
     # ── Build figure ───────────────────────────────────────────────────────────
 
-    if fig is None:
-        fig = plt.figure(figsize=figsize)
-
-    if subplot_spec is not None:
-        gs = gridspec.GridSpecFromSubplotSpec(
-            n_params, n_params, subplot_spec=subplot_spec, hspace=0.05, wspace=0.05
-        )
+    if axes_dict is not None:
+        # Overlay mode: draw onto existing axes, infer fig from them
+        fig = next(iter(axes_dict.values())).get_figure()
+        gs  = None
     else:
-        gs = gridspec.GridSpec(n_params, n_params, figure=fig, hspace=0.05, wspace=0.05)
+        axes_dict = {}
+        if fig is None:
+            fig = plt.figure(figsize=figsize)
+        if subplot_spec is not None:
+            gs = gridspec.GridSpecFromSubplotSpec(
+                n_params, n_params, subplot_spec=subplot_spec, hspace=0.05, wspace=0.05
+            )
+        else:
+            gs = gridspec.GridSpec(n_params, n_params, figure=fig, hspace=0.05, wspace=0.05)
 
-    last_im   = None
-    axes_dict = {}
+    def _clipped(lo, hi):
+        mid = 0.5 * (lo + hi)
+        half = 0.5 * (hi - lo) * axis_fraction
+        return mid - half, mid + half
+
+    last_im = None
 
     for row in range(n_params):
         for col in range(n_params):
@@ -256,33 +320,39 @@ def plot_corner(
             if col > row:
                 continue
 
-            ax = fig.add_subplot(gs[row, col])
-            axes_dict[(row, col)] = ax
+            if (row, col) in axes_dict:
+                ax = axes_dict[(row, col)]
+            else:
+                ax = fig.add_subplot(gs[row, col])
+                axes_dict[(row, col)] = ax
 
             # ── Diagonal: weighted 1-D histogram ──────────────────────────────
             if row == col:
                 counts, edges = hist1d_data[row]
                 centers = 0.5 * (edges[:-1] + edges[1:])
-                ax.bar(
-                    centers, counts, width=np.diff(edges),
-                    color='mediumpurple', alpha=0.85, linewidth=0, rasterized=True
-                )
+                if hist1d_histtype == 'step':
+                    ax.stairs(counts, edges, color=hist1d_color, linewidth=1.2, rasterized=True)
+                else:
+                    ax.bar(
+                        centers, counts, width=np.diff(edges),
+                        color=hist1d_color, alpha=0.85, linewidth=0, rasterized=True
+                    )
                 ax.axvline(true_params[row], color='k', lw=1.5, zorder=5)
                 ax.set_yticks([])
-                ax.set_xlim(edges[0], edges[-1])
+                ax.set_xlim(*_clipped(edges[0], edges[-1]))
 
             # ── Off-diagonal: 2-D weighted heatmap ────────────────────────────
             else:
                 H_sum, H_mean, xedges, yedges = hist2d_data[(row, col)]
 
-                vmin = global_vmin if global_norm else np.nanmin(H_mean)
-                vmax = global_vmax if global_norm else np.nanmax(H_mean)
-
-                im = ax.pcolormesh(
-                    xedges, yedges, H_mean.T,
-                    cmap=cmap, vmin=vmin, vmax=vmax, rasterized=True
-                )
-                last_im = im
+                if density:
+                    vmin = global_vmin if global_norm else np.nanmin(H_mean)
+                    vmax = global_vmax if global_norm else np.nanmax(H_mean)
+                    im = ax.pcolormesh(
+                        xedges, yedges, H_mean.T,
+                        cmap=cmap, vmin=vmin, vmax=vmax, rasterized=True
+                    )
+                    last_im = im
 
                 if show_contours:
                     H_base    = np.nan_to_num(H_mean, nan=0.0) if contour_on_mean else H_sum
@@ -296,14 +366,14 @@ def plot_corner(
                             levels=lvls,
                             colors=contour_colors,
                             linewidths=[0.8, 1.2],
-                            linestyles=['--', '-'],
+                            linestyles=contour_linestyles,
                             rasterized=True,
                         )
 
                 ax.axvline(true_params[col], color='k', lw=1.0, zorder=5)
                 ax.axhline(true_params[row], color='k', lw=1.0, zorder=5)
-                ax.set_xlim(xedges[0], xedges[-1])
-                ax.set_ylim(yedges[0], yedges[-1])
+                ax.set_xlim(*_clipped(xedges[0], xedges[-1]))
+                ax.set_ylim(*_clipped(yedges[0], yedges[-1]))
 
             # ── Axis labels and tick visibility ───────────────────────────────
             is_bottom_row = (row == n_params - 1)
